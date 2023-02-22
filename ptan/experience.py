@@ -21,6 +21,7 @@ class ExperienceSource:
 
     Every experience contains n list of Experience entries
     """
+
     def __init__(self, env, agent, steps_count=2, steps_delta=1, vectorized=False):
         """
         Create simple experience source
@@ -50,7 +51,7 @@ class ExperienceSource:
         states, agent_states, histories, cur_rewards, cur_steps = [], [], [], [], []
         env_lens = []
         for env in self.pool:
-            obs = env.reset()
+            obs = env.reset()[0]
             # if the environment is vectorized, all it's output is lists of results.
             # Details are here: https://github.com/openai/universe/blob/master/doc/env_semantics.rst
             if self.vectorized:
@@ -89,12 +90,12 @@ class ExperienceSource:
             global_ofs = 0
             for env_idx, (env, action_n) in enumerate(zip(self.pool, grouped_actions)):
                 if self.vectorized:
-                    next_state_n, r_n, is_done_n, _ = env.step(action_n)
+                    next_state_n, r_n, is_done_n, is_truncated_n, _ = env.step(action_n)
                 else:
-                    next_state, r, is_done, _ = env.step(action_n[0])
-                    next_state_n, r_n, is_done_n = [next_state], [r], [is_done]
+                    next_state, r, is_done, is_truncated, _ = env.step(action_n[0])
+                    next_state_n, r_n, is_done_n, is_truncated_n = [next_state], [r], [is_done], [is_truncated]
 
-                for ofs, (action, next_state, r, is_done) in enumerate(zip(action_n, next_state_n, r_n, is_done_n)):
+                for ofs, (action, next_state, r, is_done, is_truncated) in enumerate(zip(action_n, next_state_n, r_n, is_done_n, is_truncated_n)):
                     idx = global_ofs + ofs
                     state = states[idx]
                     history = histories[idx]
@@ -102,11 +103,11 @@ class ExperienceSource:
                     cur_rewards[idx] += r
                     cur_steps[idx] += 1
                     if state is not None:
-                        history.append(Experience(state=state, action=action, reward=r, done=is_done))
+                        history.append(Experience(state=state, action=action, reward=r, done=(is_done or is_truncated)))
                     if len(history) == self.steps_count and iter_idx % self.steps_delta == 0:
                         yield tuple(history)
                     states[idx] = next_state
-                    if is_done:
+                    if is_done or is_truncated:
                         # in case of very short episode (shorter than our steps count), send gathered history
                         if 0 < len(history) < self.steps_count:
                             yield tuple(history)
@@ -119,7 +120,7 @@ class ExperienceSource:
                         cur_rewards[idx] = 0.0
                         cur_steps[idx] = 0
                         # vectorized envs are reset automatically
-                        states[idx] = env.reset() if not self.vectorized else None
+                        states[idx] = env.reset()[0] if not self.vectorized else None
                         agent_states[idx] = self.agent.initial_state()
                         history.clear()
                 global_ofs += len(action_n)
@@ -149,7 +150,7 @@ def _group_list(items, lens):
     res = []
     cur_ofs = 0
     for g_len in lens:
-        res.append(items[cur_ofs:cur_ofs+g_len])
+        res.append(items[cur_ofs:cur_ofs + g_len])
         cur_ofs += g_len
     return res
 
@@ -166,9 +167,10 @@ class ExperienceSourceFirstLast(ExperienceSource):
 
     If we have partial trajectory at the end of episode, last_state will be None
     """
+
     def __init__(self, env, agent, gamma, steps_count=1, steps_delta=1, vectorized=False):
         assert isinstance(gamma, float)
-        super(ExperienceSourceFirstLast, self).__init__(env, agent, steps_count+1, steps_delta, vectorized=vectorized)
+        super(ExperienceSourceFirstLast, self).__init__(env, agent, steps_count + 1, steps_delta, vectorized=vectorized)
         self.gamma = gamma
         self.steps = steps_count
 
@@ -192,7 +194,7 @@ def discount_with_dones(rewards, dones, gamma):
     discounted = []
     r = 0
     for reward, done in zip(rewards[::-1], dones[::-1]):
-        r = reward + gamma*r*(1.-done)
+        r = reward + gamma * r * (1. - done)
         discounted.append(r)
     return discounted[::-1]
 
@@ -208,6 +210,7 @@ class ExperienceSourceRollouts:
     3. discounted rewards, with values approximation
     4. values
     """
+
     def __init__(self, env, agent, gamma, steps_count=5):
         """
         Constructs the rollout experience source
@@ -233,7 +236,7 @@ class ExperienceSourceRollouts:
 
     def __iter__(self):
         pool_size = len(self.pool)
-        states = [np.array(e.reset()) for e in self.pool]
+        states = [np.array(e.reset()[0]) for e in self.pool]
         mb_states = np.zeros((pool_size, self.steps_count) + states[0].shape, dtype=states[0].dtype)
         mb_rewards = np.zeros((pool_size, self.steps_count), dtype=np.float32)
         mb_values = np.zeros((pool_size, self.steps_count), dtype=np.float32)
@@ -250,17 +253,17 @@ class ExperienceSourceRollouts:
             dones = []
             new_states = []
             for env_idx, (e, action) in enumerate(zip(self.pool, actions)):
-                o, r, done, _ = e.step(action)
+                o, r, done, truncated, _ = e.step(action)
                 total_rewards[env_idx] += r
                 total_steps[env_idx] += 1
-                if done:
-                    o = e.reset()
+                if done or truncated:
+                    o = e.reset()[0]
                     self.total_rewards.append(total_rewards[env_idx])
                     self.total_steps.append(total_steps[env_idx])
                     total_rewards[env_idx] = 0.0
                     total_steps[env_idx] = 0
                 new_states.append(np.array(o))
-                dones.append(done)
+                dones.append(done or truncated)
                 rewards.append(r)
             # we need an extra step to get values approximation for rollouts
             if step_idx == self.steps_count:
@@ -301,6 +304,7 @@ class ExperienceSourceBuffer:
     """
     The same as ExperienceSource, but takes episodes from the buffer
     """
+
     def __init__(self, buffer, steps_count=1):
         """
         Create buffered experience source
@@ -321,7 +325,7 @@ class ExperienceSourceBuffer:
         while True:
             episode = random.randrange(len(self.buffer))
             ofs = random.randrange(self.lens[episode] - self.steps_count - 1)
-            yield self.buffer[episode][ofs:ofs+self.steps_count]
+            yield self.buffer[episode][ofs:ofs + self.steps_count]
 
 
 class ExperienceReplayBuffer:
@@ -368,6 +372,7 @@ class ExperienceReplayBuffer:
             entry = next(self.experience_source_iter)
             self._add(entry)
 
+
 class PrioReplayBufferNaive:
     def __init__(self, exp_source, buf_size, prob_alpha=0.6):
         self.exp_source_iter = iter(exp_source)
@@ -375,7 +380,7 @@ class PrioReplayBufferNaive:
         self.capacity = buf_size
         self.pos = 0
         self.buffer = []
-        self.priorities = np.zeros((buf_size, ), dtype=np.float32)
+        self.priorities = np.zeros((buf_size,), dtype=np.float32)
 
     def __len__(self):
         return len(self.buffer)
@@ -472,6 +477,7 @@ class BatchPreprocessor:
     Abstract preprocessor class descendants to which converts experience
     batch to form suitable to learning.
     """
+
     def preprocess(self, batch):
         raise NotImplementedError
 
@@ -483,6 +489,7 @@ class QLearningPreprocessor(BatchPreprocessor):
 
     To use different modes, use appropriate class method
     """
+
     def __init__(self, model, target_model, use_double_dqn=False, batch_td_error_hook=None, gamma=0.99, device="cpu"):
         self.model = model
         self.target_model = target_model

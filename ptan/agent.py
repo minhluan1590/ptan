@@ -13,6 +13,7 @@ class BaseAgent:
     """
     Abstract Agent interface
     """
+
     def initial_state(self):
         """
         Should create initial empty state for the agent. It will be called for the start of the episode
@@ -57,6 +58,7 @@ class DQNAgent(BaseAgent):
     DQNAgent is a memoryless DQN agent which calculates Q values
     from the observations and  converts them into the actions using action_selector
     """
+
     def __init__(self, dqn_model, action_selector, device="cpu", preprocessor=default_states_preprocessor):
         self.dqn_model = dqn_model
         self.action_selector = action_selector
@@ -81,6 +83,7 @@ class TargetNet:
     """
     Wrapper around model which provides copy of it instead of trained weights
     """
+
     def __init__(self, model):
         self.model = model
         self.target_model = copy.deepcopy(model)
@@ -106,6 +109,7 @@ class PolicyAgent(BaseAgent):
     """
     Policy agent gets action probabilities from the model and samples actions from it
     """
+
     # TODO: unify code with DQNAgent, as only action selector is differs.
     def __init__(self, model, action_selector=actions.ProbabilityActionSelector(), device="cpu",
                  apply_softmax=False, preprocessor=default_states_preprocessor):
@@ -141,6 +145,7 @@ class ActorCriticAgent(BaseAgent):
     Policy agent which returns policy and value tensors from observations. Value are stored in agent's state
     and could be reused for rollouts calculations by ExperienceSource.
     """
+
     def __init__(self, model, action_selector=actions.ProbabilityActionSelector(), device="cpu",
                  apply_softmax=False, preprocessor=default_states_preprocessor):
         self.model = model
