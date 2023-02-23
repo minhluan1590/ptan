@@ -15,7 +15,6 @@ import gym
 
 GAMMA = 0.99
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-r", "--runfile", required=True, help="Name of the runfile to use")
@@ -43,10 +42,11 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=run.getfloat("learning", "lr"))
 
     action_selector = EpsilonGreedyActionSelector(epsilon=run.getfloat("defaults", "epsilon"))
-    agent = ptan.agent.DQNAgent(model, action_selector, cuda=cuda_enabled)
+    agent = ptan.agent.DQNAgent(model, action_selector, device="cuda" if cuda_enabled else "cpu")
 
     exp_source = ptan.experience.ExperienceSource(env=env, agent=agent, steps_count=run.getint("defaults", "n_steps"))
     exp_replay = ptan.experience.ExperienceReplayBuffer(exp_source, buffer_size=run.getint("exp_buffer", "size"))
+
 
     def batch_to_train(batch):
         """
@@ -59,7 +59,7 @@ if __name__ == "__main__":
         for exps in batch:
             # calculate q_values for first and last state in experience sequence
             # first is needed for reference, last is used to approximate rest value
-            v = Variable(torch.from_numpy(np.array([exps[0].state, exps[-1].state], dtype=np.float32)))
+            v = Variable(torch.from_numpy(np.array([exps.state, exps[-1].state], dtype=np.float32)))
             if cuda_enabled:
                 v = v.cuda()
             q = model(v)
@@ -74,12 +74,13 @@ if __name__ == "__main__":
             q_vals.append(train_q)
         return torch.from_numpy(np.array(states, dtype=np.float32)), torch.stack(q_vals)
 
+
     reward_sma = utils.SMAQueue(run.getint("stop", "mean_games", fallback=100))
 
     for idx in range(10000):
         exp_replay.populate(run.getint("exp_buffer", "populate"))
 
-        for batch in exp_replay.batches(run.getint("learning", "batch_size")):
+        for batch in exp_replay.sample(run.getint("learning", "batch_size")):
             optimizer.zero_grad()
 
             # populate buffer
